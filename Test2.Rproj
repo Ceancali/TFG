@@ -1,13 +1,65 @@
-Version: 1.0
+install.packages(c("quantmod", "zoo", "caret"))
 
-RestoreWorkspace: Default
-SaveWorkspace: Default
-AlwaysSaveHistory: Default
+rm(list = ls())
 
-EnableCodeIndexing: Yes
-UseSpacesForTab: Yes
-NumSpacesForTab: 2
-Encoding: UTF-8
+#Instalando librerias
+library(quantmod)
+library(caret)
+library(ggplot2)
 
-RnwWeave: Sweave
-LaTeX: pdfLaTeX
+
+#Consiguiendo Precios y juntando la Data 
+getSymbols("AAPL", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
+getSymbols("MSFT", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
+getSymbols("AMZN", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
+getSymbols("GOOGL", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
+getSymbols("META", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
+
+#Ajustando la data
+stock_Data <- merge(Ad(AAPL), Ad(MSFT), Ad(AMZN), Ad(GOOGL), Ad(META))
+colnames(stock_Data) <- c("AAPL_AdjClose", "MSFT_AdjClose", "AMZN_AdjClose", "GOOGL_AdjClose", "META_AdjClose")
+
+
+#Calculating Logarithmic Return Formula
+stock_Data$AAPL_LogReturn <- diff(log(stock_Data$AAPL_AdjClose), lag = 1)
+stock_Data$MSFT_LogReturn <- diff(log(stock_Data$MSFT_AdjClose), lag = 1)
+stock_Data$AMZN_LogReturn <- diff(log(stock_Data$AMZN_AdjClose), lag = 1)
+stock_Data$GOOGL_LogReturn <- diff(log(stock_Data$GOOGL_AdjClose), lag = 1)
+stock_Data$META_LogReturn <- diff(log(stock_Data$META_AdjClose), lag = 1)
+
+#Quitando los "not applicable" de la dataset
+
+stock_Data <- na.omit(stock_Data)
+
+#Asigning weights to each return.
+stock_Data$PortfolioReturn <- 0.2 * (stock_Data$AAPL_LogReturn + stock_Data$MSFT_LogReturn + stock_Data$AMZN_LogReturn + stock_Data$GOOGL_LogReturn + stock_Data$META_LogReturn)
+
+#Calculating SMA indicators
+stock_Data$AAPL_SMA10 <- SMA(stock_Data$AAPL_AdjClose, n = 10)
+stock_Data$AAPL_SMA30 <- SMA(stock_Data$AAPL_AdjClose, n = 30)
+stock_Data$MSFT_SMA10 <- SMA(stock_Data$MSFT_AdjClose, n = 10)
+stock_Data$MSFT_SMA30 <- SMA(stock_Data$MSFT_AdjClose, n = 30)
+stock_Data$AMZN_SMA10 <- SMA(stock_Data$AMZN_AdjClose ,n = 10)
+stock_Data$AMZN_SMA30 <- SMA(stock_Data$AMZN_AdjClose, n = 30)
+stock_Data$GOOGL_SMA10 <- SMA(stock_Data$GOOGL_AdjClose, n = 10)
+stock_Data$GOOGL_SMA30 <- SMA(stock_Data$GOOGL_AdjClose, n = 30)
+stock_Data$META_SMA10 <- SMA(stock_Data$META_AdjClose, n = 10)
+stock_Data$META_SMA30 <- SMA(stock_Data$META_AdjClose, n = 30)
+stock_Data <- na.omit(stock_Data)
+
+#Separating the data into training and testing sets. 
+set.seed(123)
+index <- createDataPartition(stock_Data$PortfolioReturn, p = 0.8, list = FALSE)
+train <- stock_Data[index,]
+test <- stock_Data[index,]
+
+#Creating the model using the data
+model <- lm(PortfolioReturn ~ AAPL_SMA10 + AAPL_SMA30 + MSFT_SMA10 + MSFT_SMA30 + AMZN_SMA10 + AMZN_SMA30 + GOOGL_SMA10 + GOOGL_SMA30 + META_SMA10 + META_SMA30, data = train)
+print(summary(model))
+
+#Creating predictions & scaling them back to %.
+predictions <- predict(model, newdata = test)
+predictions_scaled = predictions * 100
+print(paste("Predictions (in %):", round(predictions_scaled, 4)))
+rmse <- sqrt(mean((predictions - test$NextClose)^2))
+print(paste("RMSE:", rmse))
