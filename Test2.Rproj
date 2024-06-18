@@ -1,65 +1,82 @@
-install.packages(c("quantmod", "zoo", "caret"))
-
 rm(list = ls())
 
-#Instalando librerias
 library(quantmod)
 library(caret)
-library(ggplot2)
+library(randomForest)
+library(openxlsx)
 
+getSymbols("IBE.MC", src = "yahoo", from = "2021-01-01", to = "2024-01-01")
+stock_Data <- merge(Ad(IBE.MC))
+colnames(stock_Data) <- c("IBE.MC_AdjClose")
 
-#Consiguiendo Precios y juntando la Data 
-getSymbols("AAPL", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
-getSymbols("MSFT", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
-getSymbols("AMZN", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
-getSymbols("GOOGL", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
-getSymbols("META", src = "yahoo", from = "2021-01-01", to = "2023-01-01")
-
-#Ajustando la data
-stock_Data <- merge(Ad(AAPL), Ad(MSFT), Ad(AMZN), Ad(GOOGL), Ad(META))
-colnames(stock_Data) <- c("AAPL_AdjClose", "MSFT_AdjClose", "AMZN_AdjClose", "GOOGL_AdjClose", "META_AdjClose")
-
-
-#Calculating Logarithmic Return Formula
-stock_Data$AAPL_LogReturn <- diff(log(stock_Data$AAPL_AdjClose), lag = 1)
-stock_Data$MSFT_LogReturn <- diff(log(stock_Data$MSFT_AdjClose), lag = 1)
-stock_Data$AMZN_LogReturn <- diff(log(stock_Data$AMZN_AdjClose), lag = 1)
-stock_Data$GOOGL_LogReturn <- diff(log(stock_Data$GOOGL_AdjClose), lag = 1)
-stock_Data$META_LogReturn <- diff(log(stock_Data$META_AdjClose), lag = 1)
-
-#Quitando los "not applicable" de la dataset
-
+# Calculating log returns
+stock_Data$IBE.MC_LogReturn <- diff(log(stock_Data$IBE.MC_AdjClose), lag = 1)
 stock_Data <- na.omit(stock_Data)
 
-#Asigning weights to each return.
-stock_Data$PortfolioReturn <- 0.2 * (stock_Data$AAPL_LogReturn + stock_Data$MSFT_LogReturn + stock_Data$AMZN_LogReturn + stock_Data$GOOGL_LogReturn + stock_Data$META_LogReturn)
-
-#Calculating SMA indicators
-stock_Data$AAPL_SMA10 <- SMA(stock_Data$AAPL_AdjClose, n = 10)
-stock_Data$AAPL_SMA30 <- SMA(stock_Data$AAPL_AdjClose, n = 30)
-stock_Data$MSFT_SMA10 <- SMA(stock_Data$MSFT_AdjClose, n = 10)
-stock_Data$MSFT_SMA30 <- SMA(stock_Data$MSFT_AdjClose, n = 30)
-stock_Data$AMZN_SMA10 <- SMA(stock_Data$AMZN_AdjClose ,n = 10)
-stock_Data$AMZN_SMA30 <- SMA(stock_Data$AMZN_AdjClose, n = 30)
-stock_Data$GOOGL_SMA10 <- SMA(stock_Data$GOOGL_AdjClose, n = 10)
-stock_Data$GOOGL_SMA30 <- SMA(stock_Data$GOOGL_AdjClose, n = 30)
-stock_Data$META_SMA10 <- SMA(stock_Data$META_AdjClose, n = 10)
-stock_Data$META_SMA30 <- SMA(stock_Data$META_AdjClose, n = 30)
+# Calculating SMAs
+stock_Data$IBE.MC_SMA10 <- SMA(stock_Data$IBE.MC_AdjClose, n = 10)
+stock_Data$IBE.MC_SMA30 <- SMA(stock_Data$IBE.MC_AdjClose, n = 30)
 stock_Data <- na.omit(stock_Data)
 
-#Separating the data into training and testing sets. 
+# Calculating RSI
+stock_Data$IBE.MC_RSI <- RSI(Cl(IBE.MC), n = 14)
+stock_Data <- na.omit(stock_Data)
+
+stock_Data$IBE.MC_SimpleReturn <- exp(stock_Data$IBE.MC_LogReturn) - 1
+
+# Split the data into training and test sets (80% train, 20% test)
 set.seed(123)
-index <- createDataPartition(stock_Data$PortfolioReturn, p = 0.8, list = FALSE)
-train <- stock_Data[index,]
-test <- stock_Data[index,]
+split_index <- floor(0.8 * nrow(stock_Data))
+train <- stock_Data[1:split_index, ]
+test <- stock_Data[(split_index + 1):nrow(stock_Data), ]
 
-#Creating the model using the data
-model <- lm(PortfolioReturn ~ AAPL_SMA10 + AAPL_SMA30 + MSFT_SMA10 + MSFT_SMA30 + AMZN_SMA10 + AMZN_SMA30 + GOOGL_SMA10 + GOOGL_SMA30 + META_SMA10 + META_SMA30, data = train)
-print(summary(model))
+# Train control for cross-validation
+trainControl <- trainControl(
+  method = "cv",
+  number = 10,  # Number of cross-validation folds
+  savePredictions = "final",
+  verboseIter = TRUE
+)
 
-#Creating predictions & scaling them back to %.
-predictions <- predict(model, newdata = test)
-predictions_scaled = predictions * 100
-print(paste("Predictions (in %):", round(predictions_scaled, 4)))
-rmse <- sqrt(mean((predictions - test$NextClose)^2))
-print(paste("RMSE:", rmse))
+# Train the Random Forest model
+rf_model <- train(
+  IBE.MC_LogReturn ~ IBE.MC_SMA10 + IBE.MC_SMA30 + IBE.MC_RSI,
+  data = train,
+  method = "rf",
+  trControl = trainControl,
+  ntree = 500,
+  tuneLength = 3
+)
+
+print(rf_model)
+
+# Predicting on the test set
+predictions_rf <- predict(rf_model, newdata = test)
+
+# Converting predictions to simple returns and calculate cumulative returns
+predictions_rf_simple <- exp(predictions_rf) - 1
+cumulative_returns_rf <- cumprod(1 + predictions_rf_simple) - 1
+cumulative_returns_rf_per <- cumulative_returns_rf * 100
+
+# Printing predictions and cumulative returns
+print(paste("Random Forest Predictions (in %):", round(predictions_rf_simple * 100, 4)))
+print(paste("Cumulative Returns (%):", round(cumulative_returns_rf_per, 4)))
+
+# Create data frame for predictions and cumulative returns
+results <- data.frame(
+  Date = index(test),
+  Actual_LogReturn = test$IBE.MC_LogReturn,
+  Predicted_LogReturn = predictions_rf,
+  Predicted_SimpleReturn = predictions_rf_simple,
+  Cumulative_Return = cumulative_returns_rf_per
+)
+
+
+# Calculating and printing RMSE
+rmse_rf <- sqrt(mean((predictions_rf - test$IBE.MC_LogReturn)^2))
+print(paste("RMSE (Random Forest):", rmse_rf))
+
+write.xlsx(stock_Data, file = "StockDataIBE.MC.xlsx", sheetName = "StockData", rowNames = TRUE)
+write.xlsx(results, file = "IBE.MCPredictions.xlsx", sheetName = "Predictions", rowNames = TRUE)
+
+
